@@ -1,3 +1,9 @@
+# My files
+teleforwarder.py
+*.session
+src/sessions
+src/utils/multi_user_forwarder.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
