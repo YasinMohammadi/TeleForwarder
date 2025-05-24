@@ -1,113 +1,119 @@
 
 # TeleForwarder
 
-**TeleForwarder** project automatically forwards messages from one Telegram channel to one or more supergroups using a **single** user account (via Telethon). It also uses a bot  allowing dynamic settings (such as target groups, cron schedule, and forwarding modes) to be updated live via an admin Telegram bot interface.
+**TeleForwarder ** is a _single-user_ Telegram forwarder that forwards messages from your channel to all/list of groups.
+
+-   **Daily** mode – fetch all _text-only_ posts from today (Midnight → now, Asia/Tehran) and resend them to every target group in round-robin order, **60 s** apart.
+    
+-   **Listen** mode – stay connected to the source channel and forward each new _text_ post the moment it arrives.
+    
+-   Targets can be a **fixed list** (`TARGET_GROUPS`) or **every public group** the user account has joined (`FORWARD_TO=all`).
+    
+-   No admin bot, no interactive commands — _the entire runtime is driven by the `.env` file_.
+    
+
+----------
 
 ## Features
 
-- **Automatic Forwarding:** Fetch messages from a specified Telegram channel and forward them to multiple supergroups.
-- **Sensitive Data via .env:** API credentials, channel username, and bot token are loaded from a `.env` file.
-- **Dynamic Configuration:** Update supergroups, cron schedule, forward mode, and order through Telegram commands.
-- **Forward Modes:**
-  - **today:** Forward all messages from today.
-  - **new:** Forward only messages that have not been forwarded yet.
-- **Forward Order:**
-  - **batch:** Forward all messages in one API call (if supported).
-  - **one_by_one:** Forward messages individually with an optional delay.
+**Time-window**
 
-- **Allowed Time Interval:**  
-  Control the hours during which messages are forwarded.  
-  - By default, forwarding is only enabled between 08:00 and 22:00.  
-  - Use `/settimeinterval` to adjust the interval or disable it (set to "always") to forward messages at any time.
+Only forwards between `START_HOUR` ≤ local hour < `END_HOUR` (both in **Asia/Tehran** by default). Outside the window it logs `DEBUG` and sleeps.
 
-- **Admin Interface:**  
-  Manage configuration using commands:
-  - `/status` – View current configuration.
-  - `/setgroups @group1, @group2` – Set a new list of supergroups.
-  - `/addgroup @group` – Add a single group.
-  - `/removegroup @group` – Remove a group.
-  - `/setcron <cron_schedule>` – Update the cron schedule.
-  - `/setmode <today|new>` – Change the forwarding mode.
-  - `/setorder <batch|one_by_one>` – Change the forwarding order.
-  - `/settimeinterval <always> OR /settimeinterval <start_hour> <end_hour>` – Set or disable the allowed time interval.
+**Pure text**
 
+Any post that contains **media** is ignored. Forwarding uses `send_message` — never `forward_messages` — so no photos or files slip through.
 
-## Project Structure
+**Round-robin pacing**
 
-```bash
-├── .env              # Environment variables (API ID, hash, bot token)
-├── config.json       # Dynamic config (source channel, supergroups, modes)
-├── requirements.txt  # Python dependencies
-└── src/
-    ├── main.py  			#Entry point: logs in user, schedules forwarding, starts admin bot
-    └── src/            
-	    ├── envconfig.py         # Loads .env (API creds, bot token)
-	    ├── config_manager.py    # Reads/writes config.json, handles last_forwarded_id
-	    ├── single_user_forwarder.py
-	    ├── admin_bot.py
-	    └── user_sessions/       # Telethon session file (e.g. user1.session)
+_Message 1_ → all groups → wait 60 s → _Message 2_ → … When the list ends it starts over (daily mode).
+
+**Pluggable modes**
+
+Switch via `FORWARD_MODE=daily
+
+**Clean Architecture**
+
+Core utilities → Domain → Infrastructure → Application (use-cases) → Framework (`main.py`).
+
+**Logging**
+
+`loguru` with file rotation (`forwarder.log`, 10 MB, 10 days).
+
+**Typed**
+
+Python 3.10+ with explicit type hints.
+
+**Unit tests**
+
+`pytest` & `pytest-asyncio`, stubbing Telethon so tests run offline.
+
+## Project Layout
+
+```txt
+teleforwarder/
+│
+├── config.py                   ← pydantic-settings (Settings)
+├── core/
+│   ├── __init__.py
+│   └── time_utils.py           ← start_of_today()
+├── domain/
+│   ├── model.py                ← TextMessage VO
+│   └── services.py             ← round_robin()
+├── infrastructure/
+│   ├── logger_setup.py         ← adds loguru sink
+│   └── telegram_gateway.py     ← Telethon wrapper
+├── application/
+│   └── use_cases.py            ← ForwardDailyTexts  &  ForwardOnNew
+├── main.py                     ← bootstrap (select mode, schedule jobs)
+└── __init__.py
+tests/                           ← pytest suite (offline)
 ```
 
-## Quick Start
-
-**Clone the repository:**
+## Installation
 
 ```bash
-   git clone https://github.com/yourusername/teleforwarder.git
-   cd teleforwarder
-```
-
-**Install Dependencies:**
-```bash
+git clone https://github.com/YasinMohammadi/teleforwarder.git
+cd teleforwarder
+python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e .   # editable install so package is on PYTHONPATH
 ```
 
-**Set Up `.env`:**  
-Provide your API credentials and bot token in `.env`:
-```bash
-TELEGRAM_BOT_TOKEN=123456:ABC-YourBotToken
+## Environment Variables (`.env`)
+
+```ini
+# --- Telegram API credentials ---
 TELEGRAM_API_ID=123456
-TELEGRAM_API_HASH=YourApiHash
+TELEGRAM_API_HASH=abc123...
 
+# --- Session file name ---
+TELEGRAM_SESSION=user_session
+
+# --- Forwarder behaviour ---
+SOURCE_CHANNEL=@my_source_channel       # channel to read from
+FORWARD_MODE=daily                      # daily | listen
+FORWARD_TO=list                         # list | all
+TARGET_GROUPS=@g1,@g2                   # comma-separated; ignored if FORWARD_TO=all
+
+# --- Time & pacing ---
+TIMEZONE=Asia/Tehran
+START_HOUR=8
+END_HOUR=22
+SLEEP_BETWEEN_MESSAGES=60               # seconds between messages in a round
+
+# --- Daily refresh cron (Tehran time) ---
+CRON_SCHEDULE=0 0 * * *                 # midnight every day
 ```
--   **Check `config.json`:**
-    
-    -   `source_channel`: The channel you’re fetching from (e.g. `"@my_source_channel"`).
-    -   `supergroups`: A list of target groups or supergroups to forward to.
-    -   `forward_mode`: Either `"today"` or `"new"`.
-    -   `cron_schedule`: e.g. `"*/5 * * * *"` for every 5 minutes.
-    -   `last_forwarded_id`: If using `"new"` mode, store the highest forwarded message ID here.
--   **Run:**
+_Leave `TARGET_GROUPS` empty if you’ll use `FORWARD_TO=all`._
+
+----------
+
+## Running
 ```bash
-python src/main.py
+python -m teleforwarder.main
 ```
-    -   On first run, Telethon may prompt for a phone/code if no session file exists.
-    -   Once logged in, the user session is saved in `src/user_sessions/user1.session`.
 
-    
-    
+## License
 
-## Admin Bot Commands
-
-Use these commands in your admin bot’s private chat to dynamically update configuration:
-
--   `/status` – Display the current `config.json`.
--   `/setchannel @somechannel` – Change the source channel.
--   `/setgroups @g1, @g2` – Overwrite the supergroups list.
--   `/setmode today|new` – Switch between re‐forwarding all day’s messages vs. forwarding only new.
--   `/settimeinterval always` or `/settimeinterval 8 22` – Disable or enable daily time window.
--   `/setcron "* * * * *"` – Update the cron schedule (run job every minute, etc.).
-
-
-
-
-## Logging
-
--   The project uses Python’s `logging` module with a default level of `INFO`.
--   To see debug‐level logs (including raw HTTP requests from `python-telegram-bot`), set `level=logging.DEBUG` in `main.py`.
-
-## Contributing
-
-Feel free to submit pull requests or open issues to improve logging, add advanced filtering, or handle multi‐user scenarios.
-
-Enjoy your single-user Telegram forwarder with chunked “today” mode and dynamic admin configuration!
+MIT. Feel free to open issues & PRs.
